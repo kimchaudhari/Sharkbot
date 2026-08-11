@@ -1,0 +1,1121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0f1319">
+<title>SharkBot — BLE Drive Console</title>
+<script>
+// Applied before first paint so switching themes/layouts never flashes the default.
+(function(){
+  try {
+    var th = localStorage.getItem('sharkbot.theme');
+    if (th && th !== 'cyan') document.documentElement.setAttribute('data-theme', th);
+    var lo = localStorage.getItem('sharkbot.layout');
+    if (lo && lo !== 'standard') document.documentElement.setAttribute('data-layout', lo);
+  } catch (_) { /* localStorage unavailable — defaults apply */ }
+})();
+</script>
+<style>
+/* ============================================================
+   SharkBot Drive Console — bench-instrument styling
+   Palette: cool slate neutrals · cyan = link OK · signal red = fault
+   ============================================================ */
+:root{
+  --bg0:#0f1319;          /* page */
+  --bg1:#161c25;          /* panel */
+  --bg2:#1d2531;          /* raised control */
+  --bg3:#0b0e13;          /* recessed well (log) */
+  --edge:#2a3444;
+  --edge2:#3d4c64;
+  --ink:#dce4f0;
+  --dim:#8da0b9;
+  --faint:#5d6c83;
+  --ok:#41d8e8;           /* connected / live data */
+  --ok-rgb:65,216,232;
+  --ok-soft:rgba(65,216,232,.14);
+  --bad:#ff6a55;          /* fault / disconnected — constant across themes */
+  --bad-soft:rgba(255,106,85,.12);
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,"Cascadia Mono",Consolas,"Liberation Mono","DejaVu Sans Mono",monospace;
+  --padsz:clamp(64px,17vw,84px);
+}
+/* ---------- color themes — swap the "connected/live" accent only; the
+   fault-red stays constant so its meaning never shifts between themes ---------- */
+:root[data-theme="amber"]{--ok:#ffb73a;--ok-rgb:255,183,58;--ok-soft:rgba(255,183,58,.14)}
+:root[data-theme="violet"]{--ok:#a78bfa;--ok-rgb:167,139,250;--ok-soft:rgba(167,139,250,.14)}
+:root[data-theme="mint"]{--ok:#2dd4a7;--ok-rgb:45,212,167;--ok-soft:rgba(45,212,167,.14)}
+*{box-sizing:border-box;margin:0;padding:0}
+html{height:100%}
+body{
+  min-height:100%;
+  background:
+    radial-gradient(1200px 500px at 50% -10%, rgba(var(--ok-rgb),.045), transparent 60%),
+    var(--bg0);
+  color:var(--ink);
+  font-family:var(--mono);
+  font-size:14px;
+  line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+}
+#app{max-width:1100px;margin:0 auto;padding:20px 18px 40px;display:flex;flex-direction:column;gap:16px}
+
+/* ---------- shared panel chrome ---------- */
+.panel{
+  background:linear-gradient(180deg, rgba(255,255,255,.02), transparent 30%), var(--bg1);
+  border:1px solid var(--edge);
+  border-radius:10px;
+  padding:14px 16px 16px;
+}
+.panel-head{
+  display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
+  padding-bottom:10px;margin-bottom:12px;
+  border-bottom:1px solid var(--edge);
+}
+.panel-title{font-size:11px;letter-spacing:.18em;color:var(--dim);font-weight:700}
+.panel-sub{font-size:10px;letter-spacing:.08em;color:var(--faint)}
+kbd{
+  font-family:var(--mono);font-size:9px;color:var(--faint);
+  border:1px solid var(--edge);border-radius:3px;padding:0 4px;line-height:1.5;
+}
+
+/* ---------- masthead ---------- */
+.masthead{
+  display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
+  padding:14px 16px;
+  background:linear-gradient(180deg, rgba(255,255,255,.03), transparent 45%), var(--bg1);
+  border:1px solid var(--edge);border-radius:10px;
+}
+.nameplate{display:flex;align-items:center;gap:14px;min-width:0}
+.badge{
+  font-size:9px;letter-spacing:.14em;color:var(--faint);
+  border:1px solid var(--edge2);border-radius:4px;padding:5px 7px;
+  white-space:nowrap;
+}
+h1{font-size:19px;letter-spacing:.22em;font-weight:700;white-space:nowrap}
+h1 small{display:block;font-size:9px;letter-spacing:.3em;color:var(--dim);font-weight:400;margin-top:2px}
+.linkcluster{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.lamp{
+  width:12px;height:12px;border-radius:50%;flex:none;
+  background:var(--bad);box-shadow:0 0 0 3px var(--bad-soft);
+}
+.lamp.connecting{background:var(--ok);opacity:.55;box-shadow:0 0 0 3px var(--ok-soft);animation:lampPulse 1s ease-in-out infinite}
+.lamp.connected{background:var(--ok);box-shadow:0 0 0 3px var(--ok-soft),0 0 14px rgba(var(--ok-rgb),.5)}
+@keyframes lampPulse{50%{opacity:.2}}
+.status-text{display:flex;flex-direction:column;min-width:150px}
+#statusLabel{font-size:12px;letter-spacing:.14em;font-weight:700}
+#statusSub{font-size:10px;letter-spacing:.06em;color:var(--faint);min-height:1.3em}
+body.live #statusLabel{color:var(--ok)}
+button{
+  font-family:var(--mono);cursor:pointer;color:var(--ink);
+  background:var(--bg2);border:1px solid var(--edge2);border-radius:7px;
+}
+button:disabled{cursor:default;opacity:.38}
+button:focus-visible, input:focus-visible{outline:2px solid var(--ok);outline-offset:2px}
+.linkbtns{display:flex;gap:8px;flex-wrap:wrap}
+#btnConnect,#btnDisconnect{
+  font-size:12px;letter-spacing:.16em;font-weight:700;
+  padding:11px 22px;
+  background:transparent;
+}
+#btnConnect{border-color:var(--ok);color:var(--ok)}
+#btnConnect:hover:not(:disabled){background:var(--ok-soft)}
+#btnDisconnect{border-color:var(--bad);color:var(--bad)}
+#btnDisconnect:hover:not(:disabled){background:var(--bad-soft)}
+
+/* ---------- display settings (theme + layout) ---------- */
+.settings-wrap{position:relative}
+#btnSettings{font-size:15px;padding:9px 12px;color:var(--faint)}
+#btnSettings[aria-expanded="true"]{color:var(--ok);border-color:var(--ok)}
+.settings-pop{
+  position:fixed;top:70px;right:16px;z-index:30;
+  width:278px;max-width:calc(100vw - 32px);
+  background:var(--bg1);border:1px solid var(--edge2);border-radius:10px;
+  padding:14px;display:flex;flex-direction:column;gap:14px;
+  box-shadow:0 16px 40px rgba(0,0,0,.55);
+}
+.settings-pop[hidden]{display:none}
+.settings-row{display:flex;flex-direction:column;gap:8px}
+.settings-label{font-size:9px;letter-spacing:.16em;color:var(--dim);font-weight:700}
+.swatches{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.swatches.layouts{grid-template-columns:1fr}
+.swatch{
+  display:flex;align-items:center;gap:8px;
+  padding:8px 10px;font-size:9px;letter-spacing:.1em;font-weight:700;color:var(--dim);
+  border:1px solid var(--edge2);border-radius:6px;background:var(--bg2);
+  justify-content:flex-start;
+}
+.swatch .dot{width:10px;height:10px;border-radius:50%;flex:none;box-shadow:0 0 6px currentColor}
+.swatch[data-theme="cyan"] .dot{background:#41d8e8;color:#41d8e8}
+.swatch[data-theme="amber"] .dot{background:#ffb73a;color:#ffb73a}
+.swatch[data-theme="violet"] .dot{background:#a78bfa;color:#a78bfa}
+.swatch[data-theme="mint"] .dot{background:#2dd4a7;color:#2dd4a7}
+.swatch .glyph{font-size:11px;flex:none;width:1.2em;text-align:center}
+.swatch[aria-pressed="true"]{border-color:var(--ok);color:var(--ink);background:var(--ok-soft)}
+.swatch:hover:not([aria-pressed="true"]){color:var(--ink);border-color:var(--edge2)}
+.settings-note{font-size:9px;color:var(--faint);letter-spacing:.04em;line-height:1.5}
+
+/* ---------- main grid ---------- */
+main{
+  display:grid;gap:16px;
+  grid-template-columns:minmax(0,1.55fr) minmax(240px,1fr);
+  grid-template-areas:"status side" "pad side";
+  align-items:start;
+}
+.status-panel{grid-area:status}
+.pad-panel{grid-area:pad}
+.side-panel{grid-area:side;display:flex;flex-direction:column;gap:18px}
+
+/* ---------- layout variants (desktop/tablet widths only — below the
+   880px breakpoint the phone stack further down always wins) ---------- */
+@media (min-width:881px){
+  html[data-layout="compact"] main{
+    grid-template-columns:1fr;grid-template-areas:"status" "pad" "side";
+  }
+  html[data-layout="compact"] .side-panel{flex-direction:row;flex-wrap:wrap}
+  html[data-layout="compact"] .side-panel .ctl-block{flex:1 1 220px}
+  html[data-layout="focus"] main{
+    grid-template-columns:minmax(0,1fr) minmax(240px,1fr);
+    grid-template-areas:"status status" "pad side";
+  }
+  html[data-layout="focus"]{--padsz:clamp(76px,20vw,108px)}
+}
+
+/* ---------- link/telemetry status strip ---------- */
+.rx-cluster{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:10px;color:var(--faint);letter-spacing:.08em}
+.rxdot{width:8px;height:8px;border-radius:50%;background:var(--edge2);transition:background .12s linear,opacity .12s linear}
+.rxdot.live{background:var(--ok)}
+.rxdot.live.tick{opacity:.25}
+.tstrip{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:12px}
+.seg{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--edge2);border-radius:7px;overflow:hidden}
+.segbtn{
+  border:0;border-radius:0;background:transparent;
+  padding:11px 4px;font-size:10px;letter-spacing:.14em;font-weight:700;color:var(--faint);
+}
+.segbtn + .segbtn{border-left:1px solid var(--edge2)}
+.segbtn.active{background:var(--ok-soft);color:var(--ok)}
+.segbtn:focus-visible{outline-offset:-3px}
+.tcell{display:flex;flex-direction:column;gap:3px}
+.tlabel{font-size:9px;letter-spacing:.16em;color:var(--faint)}
+.tval{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:.04em}
+.tval.up{color:var(--ok)}
+.tval.down{color:var(--bad)}
+.status-panel.stale .tval:not(#tLink){color:var(--faint)}
+
+/* ---------- drive pad ---------- */
+.pad{
+  display:grid;
+  grid-template-columns:repeat(3,var(--padsz));
+  grid-template-rows:repeat(3,var(--padsz));
+  gap:10px;justify-content:center;
+  touch-action:none;
+  -webkit-user-select:none;user-select:none;
+}
+.padbtn{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+  font-size:22px;
+  background:linear-gradient(180deg, #232d3c, var(--bg2));
+  border:1px solid var(--edge2);border-radius:9px;
+  color:var(--dim);
+  touch-action:none;
+  box-shadow:0 2px 0 rgba(0,0,0,.4);
+}
+.padbtn .glyph{line-height:1}
+.padbtn:not(:disabled):hover{color:var(--ink)}
+.padbtn.held{
+  color:var(--ok);border-color:var(--ok);
+  background:var(--ok-soft);
+  box-shadow:inset 0 2px 8px rgba(0,0,0,.55), 0 0 12px rgba(var(--ok-rgb),.22);
+  transform:translateY(1px);
+}
+#btnF{grid-area:1/2}#btnL{grid-area:2/1}#btnStop{grid-area:2/2}#btnR{grid-area:2/3}#btnB{grid-area:3/2}
+#btnStop{
+  font-size:12px;letter-spacing:.14em;font-weight:700;
+  color:var(--bad);border-color:var(--bad);
+  background:linear-gradient(180deg, #232d3c, var(--bg2));
+}
+#btnStop:not(:disabled):hover{background:var(--bad-soft)}
+#btnStop:not(:disabled):active{transform:translateY(1px);box-shadow:inset 0 2px 8px rgba(0,0,0,.5)}
+
+/* ---------- side controls ---------- */
+.ctl-block{display:flex;flex-direction:column;gap:9px}
+.ctl-head{display:flex;justify-content:space-between;align-items:baseline;font-size:10px;letter-spacing:.16em;color:var(--dim)}
+.ctl-head output{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink)}
+input[type=range]{
+  -webkit-appearance:none;appearance:none;width:100%;height:26px;background:transparent;
+}
+input[type=range]:disabled{opacity:.38}
+input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:3px;background:#080b0f;border:1px solid var(--edge)}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;
+  width:18px;height:18px;border-radius:50%;margin-top:-7px;
+  background:var(--bg2);border:2px solid var(--ok);
+}
+input[type=range]::-moz-range-track{height:6px;border-radius:3px;background:#080b0f;border:1px solid var(--edge)}
+input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--bg2);border:2px solid var(--ok)}
+.scale-row{display:flex;justify-content:space-between;font-size:9px;color:var(--faint);font-variant-numeric:tabular-nums}
+.hints{font-size:10px;color:var(--faint);line-height:1.7;letter-spacing:.03em}
+.hints b{color:var(--dim);font-weight:700}
+.hint-line{font-size:9px;color:var(--faint);letter-spacing:.05em;line-height:1.5}
+
+/* ---------- route recorder ---------- */
+.route-btns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.route-btns button{padding:10px 4px;font-size:10px;letter-spacing:.12em;font-weight:700}
+#btnRec.rec{color:var(--bad);border-color:var(--bad);animation:recPulse 1.1s ease-in-out infinite}
+@keyframes recPulse{50%{background:var(--bad-soft)}}
+#btnPlay.playing{color:var(--ok);border-color:var(--ok)}
+.route-status{font-size:10px;color:var(--faint);letter-spacing:.08em;font-variant-numeric:tabular-nums}
+
+/* ---------- log ---------- */
+.logpanel{padding-bottom:10px}
+.loghead{display:flex;align-items:baseline;gap:12px;padding-bottom:10px;margin-bottom:0;border-bottom:1px solid var(--edge)}
+.loghead .panel-title{flex:1}
+#btnClearLog{font-size:9px;letter-spacing:.14em;padding:5px 10px;color:var(--faint)}
+#btnClearLog:hover{color:var(--ink)}
+#log{
+  height:168px;overflow-y:auto;
+  background:var(--bg3);border:1px solid var(--edge);border-radius:0 0 8px 8px;border-top:0;
+  padding:8px 10px;
+  font-size:11px;
+}
+.lrow{display:flex;gap:10px;align-items:baseline;padding:1px 0;font-variant-numeric:tabular-nums}
+.lt{color:var(--faint);flex:none}
+.ltag{flex:none;width:3.5ch;font-weight:700;letter-spacing:.08em}
+.ltag.TX{color:var(--ok)}
+.ltag.SYS{color:var(--dim)}
+.ltag.ERR{color:var(--bad)}
+.lmsg{color:var(--ink);word-break:break-word}
+.lcnt{color:var(--faint)}
+
+/* ---------- unsupported browser card ---------- */
+#unsupported{max-width:640px;margin:60px auto;padding:0 18px}
+.unsupported-card{
+  border:1px solid var(--bad);border-radius:10px;background:var(--bg1);
+  padding:28px 26px;
+}
+.unsupported-card h2{font-size:13px;letter-spacing:.2em;color:var(--bad);margin-bottom:14px}
+.unsupported-card p{color:var(--dim);margin-bottom:12px;font-size:13px}
+.unsupported-card code{
+  display:block;background:var(--bg3);border:1px solid var(--edge);border-radius:6px;
+  padding:10px 12px;margin:8px 0;color:var(--ink);font-size:12px;
+}
+
+/* ---------- responsive ---------- */
+@media (max-width:880px){
+  main{grid-template-columns:1fr;grid-template-areas:"status" "pad" "side"}
+  .side-panel{flex-direction:row;flex-wrap:wrap}
+  .side-panel .ctl-block{flex:1 1 220px}
+}
+@media (max-width:560px){
+  #app{padding:12px 10px 30px}
+  .masthead{padding:12px}
+  h1{font-size:16px;letter-spacing:.16em}
+  .badge{display:none}
+  #log{height:140px}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none !important;transition:none !important}
+}
+</style>
+</head>
+<body>
+
+<div id="unsupported" hidden>
+  <div class="unsupported-card">
+    <h2 id="unsupportedTitle">BROWSER NOT SUPPORTED</h2>
+    <div id="unsupportedBody"></div>
+  </div>
+</div>
+
+<div id="app" hidden>
+  <header class="masthead">
+    <div class="nameplate">
+      <span class="badge">FEATHER 32u4<br>nRF51822 · NUS</span>
+      <h1>SHARKBOT<small>BLE DRIVE CONSOLE</small></h1>
+    </div>
+    <div class="linkcluster">
+      <div id="statusLamp" class="lamp" aria-hidden="true"></div>
+      <div class="status-text" role="status" aria-live="polite">
+        <span id="statusLabel">DISCONNECTED</span>
+        <span id="statusSub">Bluetooth idle</span>
+      </div>
+      <div class="linkbtns">
+        <div class="settings-wrap">
+          <button id="btnSettings" type="button" title="Display settings" aria-label="Display settings: color theme and layout" aria-haspopup="true" aria-expanded="false" aria-controls="settingsPop">&#9881;</button>
+          <div class="settings-pop" id="settingsPop" role="dialog" aria-label="Display settings" hidden>
+            <div class="settings-row">
+              <span class="settings-label">COLOR THEME</span>
+              <div class="swatches" id="themeSwatches">
+                <button class="swatch" type="button" data-theme="cyan" aria-pressed="true"><span class="dot"></span>CYAN</button>
+                <button class="swatch" type="button" data-theme="amber" aria-pressed="false"><span class="dot"></span>AMBER</button>
+                <button class="swatch" type="button" data-theme="violet" aria-pressed="false"><span class="dot"></span>VIOLET</button>
+                <button class="swatch" type="button" data-theme="mint" aria-pressed="false"><span class="dot"></span>MINT</button>
+              </div>
+            </div>
+            <div class="settings-row">
+              <span class="settings-label">LAYOUT</span>
+              <div class="swatches layouts" id="layoutSwatches">
+                <button class="swatch" type="button" data-layout="standard" aria-pressed="true"><span class="glyph">&#9636;</span>STANDARD &#8212; pad + controls beside</button>
+                <button class="swatch" type="button" data-layout="focus" aria-pressed="false"><span class="glyph">&#9635;</span>FOCUS &#8212; larger drive pad</button>
+                <button class="swatch" type="button" data-layout="compact" aria-pressed="false"><span class="glyph">&#9636;</span>COMPACT &#8212; single column, stacked</button>
+              </div>
+            </div>
+            <div class="settings-note">Saved on this device. Compact is always used below 880&nbsp;px regardless of choice.</div>
+          </div>
+        </div>
+        <button id="btnConnect" type="button">CONNECT</button>
+        <button id="btnDisconnect" type="button" disabled>DISCONNECT</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel status-panel stale" aria-label="Link status">
+      <div class="panel-head">
+        <span class="panel-title">LINK STATUS</span>
+        <span class="panel-sub">EXPECTED 10 Hz</span>
+        <span class="rx-cluster"><span id="rxDot" class="rxdot"></span><span id="rxRate">0 Hz</span></span>
+      </div>
+      <div class="tstrip">
+        <div class="tcell"><span class="tlabel">LINK</span><span class="tval down" id="tLink">DOWN</span></div>
+        <div class="tcell"><span class="tlabel">SPEED (PWM)</span><span class="tval" id="tSpeed">&#8212;</span></div>
+        <div class="tcell"><span class="tlabel">MODE</span><span class="tval" id="tMode">&#8212;</span></div>
+        <div class="tcell"><span class="tlabel">IR LEFT</span><span class="tval" id="tIrL">&#8212;</span></div>
+        <div class="tcell"><span class="tlabel">IR RIGHT</span><span class="tval" id="tIrR">&#8212;</span></div>
+      </div>
+    </section>
+
+    <section class="panel pad-panel" aria-label="Drive controls">
+      <div class="panel-head">
+        <span class="panel-title">DRIVE</span>
+        <span class="panel-sub">HOLD TO MOVE · HEARTBEAT 150 ms · DEADMAN 400 ms</span>
+      </div>
+      <div class="pad" id="pad">
+        <button class="padbtn" id="btnF" type="button" data-cmd="F" tabindex="-1" aria-label="Drive forward (hold)" disabled><span class="glyph">&#9650;</span><kbd>W</kbd></button>
+        <button class="padbtn" id="btnL" type="button" data-cmd="L" tabindex="-1" aria-label="Turn left (hold)" disabled><span class="glyph">&#9664;</span><kbd>A</kbd></button>
+        <button id="btnStop" type="button" aria-label="Stop both motors" disabled>STOP</button>
+        <button class="padbtn" id="btnR" type="button" data-cmd="R" tabindex="-1" aria-label="Turn right (hold)" disabled><span class="glyph">&#9654;</span><kbd>D</kbd></button>
+        <button class="padbtn" id="btnB" type="button" data-cmd="B" tabindex="-1" aria-label="Drive backward (hold)" disabled><span class="glyph">&#9660;</span><kbd>S</kbd></button>
+      </div>
+    </section>
+
+    <aside class="side-panel" aria-label="Speed and route">
+      <div class="panel ctl-block">
+        <div class="ctl-head"><span>SPEED</span><output id="speedOut" for="speed">180</output></div>
+        <input type="range" id="speed" min="0" max="255" step="1" value="180" aria-label="Motor speed, 0 to 255" disabled>
+        <div class="scale-row"><span>0</span><span>128</span><span>255</span></div>
+      </div>
+      <div class="panel ctl-block">
+        <div class="ctl-head"><span>MODE</span></div>
+        <div class="seg" role="group" aria-label="Drive mode">
+          <button class="segbtn active" id="modeManual" type="button" aria-pressed="true" disabled>MANUAL</button>
+          <button class="segbtn" id="modeLine" type="button" aria-pressed="false" disabled>LINE FOLLOW</button>
+        </div>
+      </div>
+      <div class="panel ctl-block">
+        <div class="ctl-head"><span>ROUTE</span><span class="route-status" id="routeStatus">EMPTY</span></div>
+        <div class="route-btns">
+          <button id="btnRec" type="button" disabled>&#9679; REC</button>
+          <button id="btnPlay" type="button" disabled>&#9654; PLAY</button>
+        </div>
+        <div class="hint-line">Records your driving; replays through the same 150&nbsp;ms heartbeat. Any input aborts.</div>
+      </div>
+      <div class="panel ctl-block hints">
+        <p><b>KEYS</b> &#8212; drive: <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> or arrows (hold), stop: <kbd>SPACE</kbd> / <kbd>ESC</kbd>.</p>
+        <p>The pad re-sends its command every 150&nbsp;ms; the robot stops itself if that stream goes quiet for 400&nbsp;ms.</p>
+      </div>
+    </aside>
+  </main>
+
+  <section class="panel logpanel" aria-label="Event log">
+    <div class="loghead">
+      <span class="panel-title">EVENT LOG</span>
+      <button id="btnClearLog" type="button">CLEAR</button>
+    </div>
+    <div id="log" role="log"></div>
+  </section>
+</div>
+
+<script>
+'use strict';
+/* ============================================================
+   SharkBot Drive Console
+   Protocol (must match firmware/robot_control.ino):
+     out: F B L R S V<0-255> M0 M1   — each terminated with \n
+     in : T,<irL>,<irR>,<speed>,<mode>\n   every 100 ms
+          E,<code>\n                      robot events (currently: DEADMAN)
+   ============================================================ */
+
+// --- BLE Nordic UART Service. Named from the PERIPHERAL's point of view:
+//     ...0002 is the peripheral's RX  -> the browser WRITES commands to it.
+//     ...0003 is the peripheral's TX  -> the browser SUBSCRIBES to notifications on it.
+const UART_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const UART_RX_CHAR = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // write here
+const UART_TX_CHAR = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // notifications from here
+
+const HEARTBEAT_MS   = 150;  // drive command repeat while a button is held
+const KEEPALIVE_MS   = 150;  // M1 repeat while in line-follow mode (feeds the deadman)
+const SPEED_MIN_GAP  = 100;  // throttle V commands to ~10/sec
+const STALE_AFTER_MS = 1500; // telemetry silence -> stale warning
+
+const $ = (id) => document.getElementById(id);
+const els = {
+  app: $('app'), unsupported: $('unsupported'),
+  unsupportedTitle: $('unsupportedTitle'), unsupportedBody: $('unsupportedBody'),
+  lamp: $('statusLamp'), statusLabel: $('statusLabel'), statusSub: $('statusSub'),
+  btnConnect: $('btnConnect'), btnDisconnect: $('btnDisconnect'),
+  statusPanel: document.querySelector('.status-panel'),
+  tSpeed: $('tSpeed'), tLink: $('tLink'), tMode: $('tMode'),
+  tIrL: $('tIrL'), tIrR: $('tIrR'),
+  rxDot: $('rxDot'), rxRate: $('rxRate'),
+  btnStop: $('btnStop'),
+  speed: $('speed'), speedOut: $('speedOut'),
+  modeManual: $('modeManual'), modeLine: $('modeLine'),
+  log: $('log'), btnClearLog: $('btnClearLog'),
+  btnRec: $('btnRec'), btnPlay: $('btnPlay'), routeStatus: $('routeStatus'),
+  btnSettings: $('btnSettings'), settingsPop: $('settingsPop'),
+  themeSwatches: $('themeSwatches'), layoutSwatches: $('layoutSwatches'),
+};
+const padButtons = Array.from(document.querySelectorAll('.padbtn[data-cmd]'));
+
+// --- link state ---------------------------------------------------------
+let device = null, rxChar = null, txChar = null;
+let connected = false, connecting = false, useWWR = false;
+let decoder = new TextDecoder();
+const encoder = new TextEncoder();
+let rxBuf = '';
+
+// --- drive state --------------------------------------------------------
+let heldDirs = [];            // [{src, cmd}] most recent last; top entry drives
+let activeCmd = null;
+let heartbeatTimer = null;
+let keepaliveTimer = null;
+let uiMode = 0;                // requested mode (telemetry shows the confirmed mode)
+
+// --- telemetry state ----------------------------------------------------
+let lastTelemetryTs = 0, rxCount = 0, dotPhase = false;
+
+// --- route recorder -----------------------------------------------------
+let route = [], recording = false, recStart = 0;
+let playing = false, playTimer = null, playStart = 0;
+
+// ========================================================================
+// Event log
+// ========================================================================
+const logState = { key: '', row: null, countEl: null, count: 1 };
+function timestamp() {
+  const d = new Date();
+  return d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+}
+function log(tag, msg) {
+  const key = tag + '|' + msg;
+  if (key === logState.key && logState.row && logState.row.parentNode) {
+    logState.count++;
+    logState.countEl.hidden = false;
+    logState.countEl.textContent = '×' + logState.count;
+    autoscroll(true);
+    return;
+  }
+  const nearBottom = els.log.scrollTop + els.log.clientHeight >= els.log.scrollHeight - 48;
+  const row = document.createElement('div');
+  row.className = 'lrow';
+  const t = document.createElement('span'); t.className = 'lt'; t.textContent = timestamp();
+  const g = document.createElement('span'); g.className = 'ltag ' + tag; g.textContent = tag;
+  const m = document.createElement('span'); m.className = 'lmsg'; m.textContent = msg;
+  const c = document.createElement('span'); c.className = 'lcnt'; c.hidden = true;
+  row.append(t, g, m, c);
+  els.log.appendChild(row);
+  while (els.log.children.length > 250) els.log.firstChild.remove();
+  Object.assign(logState, { key, row, countEl: c, count: 1 });
+  autoscroll(nearBottom);
+}
+function autoscroll(should) { if (should) els.log.scrollTop = els.log.scrollHeight; }
+els.btnClearLog.addEventListener('click', () => {
+  els.log.innerHTML = '';
+  logState.key = ''; logState.row = null;
+  log('SYS', 'Log cleared');
+});
+
+// ========================================================================
+// Status / UI enable
+// ========================================================================
+function setStatus(state, sub) {
+  els.lamp.className = 'lamp ' + state;
+  els.statusLabel.textContent =
+    state === 'connected' ? 'CONNECTED' : state === 'connecting' ? 'CONNECTING' : 'DISCONNECTED';
+  els.statusSub.textContent = sub || '';
+  els.btnConnect.textContent = state === 'connecting' ? 'CONNECTING…' : 'CONNECT';
+  els.btnConnect.disabled = (state !== 'disconnected');
+  els.btnDisconnect.disabled = (state !== 'connected');
+  document.body.classList.toggle('live', state === 'connected');
+}
+function enableControls(on) {
+  padButtons.forEach(b => { b.disabled = !on; });
+  els.btnStop.disabled = !on;
+  els.speed.disabled = !on;
+  els.modeManual.disabled = !on;
+  els.modeLine.disabled = !on;
+  els.btnRec.disabled = !on;
+  els.btnPlay.disabled = !on;
+}
+
+// ========================================================================
+// Command writer — serialized queue so GATT writes never overlap
+// ========================================================================
+let writeChain = Promise.resolve();
+let pendingWrites = 0, congestionWarned = false;
+
+function sendCommand(cmd, opts = {}) {
+  if (!connected || !rxChar) return;
+  // Heartbeat repeats are droppable: if the link stalls, let the queue drain
+  // instead of growing — the firmware deadman is the real safety net.
+  if (opts.droppable && pendingWrites > 6) {
+    if (!congestionWarned) { congestionWarned = true; log('ERR', 'Link congested — dropping repeats'); }
+    return;
+  }
+  const payload = encoder.encode(cmd + '\n');
+  pendingWrites++;
+  writeChain = writeChain
+    .then(async () => {
+      if (!connected || !rxChar) return;
+      if (useWWR) await rxChar.writeValueWithoutResponse(payload);
+      else await rxChar.writeValue(payload);
+      congestionWarned = false;
+      if (!opts.quiet) log('TX', cmd);
+    })
+    .catch(err => {
+      if (connected) log('ERR', 'TX ' + cmd + ' failed: ' + (err && err.message || err));
+    })
+    .finally(() => { pendingWrites--; });
+}
+
+// ========================================================================
+// Drive engine — hold-to-drive with 150 ms heartbeat
+// ========================================================================
+function clearHeartbeat() {
+  if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+}
+function pressDir(cmd, src) {
+  if (!connected) return;
+  if (playing && src !== 'route') abortPlayback('manual override');
+  if (heldDirs.some(h => h.src === src)) return;
+  heldDirs.push({ src, cmd });
+  refreshDrive();
+}
+function releaseDir(src) {
+  const i = heldDirs.findIndex(h => h.src === src);
+  if (i < 0) return;
+  heldDirs.splice(i, 1);
+  refreshDrive();
+}
+function refreshDrive() {
+  const top = heldDirs.length ? heldDirs[heldDirs.length - 1].cmd : null;
+  if (top === activeCmd) { updatePadVisual(); return; }
+  recEvent(top || 'S');
+  activeCmd = top;
+  clearHeartbeat();
+  if (top) {
+    if (uiMode === 1) {
+      // Firmware drops to manual on any drive command; mirror that here.
+      setUiMode(0, { send: false });
+      log('SYS', 'LINE FOLLOW overridden by manual drive');
+    }
+    sendCommand(top);                                                   // logged
+    heartbeatTimer = setInterval(() => sendCommand(top, { quiet: true, droppable: true }), HEARTBEAT_MS);
+  } else {
+    sendCommand('S');
+  }
+  updatePadVisual();
+}
+function stopAllDrive(sendS) {
+  heldDirs = [];
+  clearHeartbeat();
+  const wasDriving = activeCmd !== null;
+  activeCmd = null;
+  if (sendS && wasDriving) { recEvent('S'); sendCommand('S'); }
+  updatePadVisual();
+}
+function updatePadVisual() {
+  padButtons.forEach(b => b.classList.toggle('held', b.dataset.cmd === activeCmd));
+}
+
+// pointer wiring — pointerdown starts, pointerup/leave/cancel end
+padButtons.forEach(btn => {
+  const cmd = btn.dataset.cmd;
+  btn.addEventListener('pointerdown', e => {
+    if (btn.disabled || !connected) return;
+    e.preventDefault();
+    try { btn.setPointerCapture(e.pointerId); } catch (_) { /* not fatal */ }
+    pressDir(cmd, 'ptr:' + e.pointerId);
+  });
+  const release = e => releaseDir('ptr:' + e.pointerId);
+  btn.addEventListener('pointerup', release);
+  btn.addEventListener('pointercancel', release);
+  btn.addEventListener('pointerleave', release);
+  btn.addEventListener('lostpointercapture', release);
+});
+$('pad').addEventListener('contextmenu', e => e.preventDefault());
+
+function stopButtonPressed() {
+  if (!connected) return;
+  if (playing) abortPlayback('stop pressed');
+  recEvent('S');
+  heldDirs = [];
+  clearHeartbeat();
+  activeCmd = null;
+  updatePadVisual();
+  if (uiMode === 1) setUiMode(0, { send: false }); // S itself drops firmware to manual
+  sendCommand('S');
+}
+els.btnStop.addEventListener('click', stopButtonPressed);
+
+// keyboard — mirrors the buttons; ignore auto-repeat
+const KEYMAP = {
+  ArrowUp: 'F', KeyW: 'F',
+  ArrowDown: 'B', KeyS: 'B',
+  ArrowLeft: 'L', KeyA: 'L',
+  ArrowRight: 'R', KeyD: 'R',
+};
+const isFormEl = t => !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT');
+window.addEventListener('keydown', e => {
+  if (e.repeat) return;
+  if (!connected) return;
+  const cmd = KEYMAP[e.code];
+  if (cmd && !isFormEl(e.target)) {
+    e.preventDefault();
+    pressDir(cmd, 'key:' + e.code);
+    return;
+  }
+  if (e.code === 'Escape' || (e.code === 'Space' && !isFormEl(e.target) && (!e.target || e.target.tagName !== 'BUTTON'))) {
+    e.preventDefault();
+    stopButtonPressed();
+  }
+});
+window.addEventListener('keyup', e => {
+  if (KEYMAP[e.code]) releaseDir('key:' + e.code);
+});
+// Safety: losing sight of the page releases everything.
+window.addEventListener('blur', () => { if (connected && heldDirs.length) stopAllDrive(true); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && connected) {
+    if (playing) abortPlayback('page hidden');
+    stopAllDrive(true);
+    if (uiMode === 1) setUiMode(0, { send: true });
+    log('SYS', 'Page hidden — drive halted');
+  }
+});
+
+// ========================================================================
+// Speed slider — throttled to ~10 commands/sec
+// ========================================================================
+function throttledSender(prefix, onSend) {
+  let timer = null, pending = null, lastTs = 0;
+  return v => {
+    pending = v;
+    if (timer || !connected) return;
+    const wait = Math.max(0, SPEED_MIN_GAP - (Date.now() - lastTs));
+    timer = setTimeout(() => {
+      timer = null;
+      lastTs = Date.now();
+      if (connected && pending !== null) {
+        sendCommand(prefix + pending);
+        if (onSend) onSend(pending);
+      }
+      pending = null;
+    }, wait);
+  };
+}
+const sendSpeed = throttledSender('V', v => recEvent('V' + v));
+
+els.speed.addEventListener('input', () => {
+  els.speedOut.textContent = els.speed.value;
+  try { localStorage.setItem('sharkbot.speed', els.speed.value); } catch (_) {}
+  sendSpeed(els.speed.value);
+});
+
+// ========================================================================
+// Mode toggle (+ M1 keepalive so line mode also feeds the deadman timer)
+// ========================================================================
+function setUiMode(m, { send = true } = {}) {
+  uiMode = m;
+  els.modeManual.classList.toggle('active', m === 0);
+  els.modeLine.classList.toggle('active', m === 1);
+  els.modeManual.setAttribute('aria-pressed', String(m === 0));
+  els.modeLine.setAttribute('aria-pressed', String(m === 1));
+  if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
+  if (send && connected) {
+    if (m === 1) {
+      stopAllDrive(false);
+      sendCommand('S');   // enter line mode from a known-stopped state
+      sendCommand('M1');
+    } else {
+      sendCommand('M0');
+    }
+  }
+  if (m === 1 && connected) {
+    keepaliveTimer = setInterval(() => sendCommand('M1', { quiet: true, droppable: true }), KEEPALIVE_MS);
+  }
+}
+els.modeManual.addEventListener('click', () => { if (uiMode !== 0) setUiMode(0, { send: true }); });
+els.modeLine.addEventListener('click', () => {
+  if (uiMode === 1) return;
+  if (playing) abortPlayback('mode change');
+  if (recording) stopRecording('line mode');
+  setUiMode(1, { send: true });
+});
+
+// ========================================================================
+// Route recorder — capture drive events, replay through the same safe path
+// (playback feeds pressDir/releaseDir, so the 150 ms heartbeat, the pad
+// visuals, and every abort path behave exactly as if a human were driving)
+// ========================================================================
+function recEvent(cmd) {
+  if (!recording) return;
+  if (route.length && route[route.length - 1].cmd === cmd) return;
+  if (route.length >= 200) { stopRecording('buffer full'); return; }
+  route.push({ t: Date.now() - recStart, cmd });
+}
+function startRecording() {
+  if (playing) abortPlayback('recording started');
+  route = [];
+  recording = true;
+  recStart = Date.now();
+  recEvent('V' + els.speed.value);           // open with the current speed
+  els.btnRec.textContent = '■ STOP';
+  els.btnRec.classList.add('rec');
+  log('SYS', 'Route recording started — drive now');
+  updateRouteStatus();
+}
+function stopRecording(reason) {
+  if (!recording) return;
+  recording = false;
+  if (!route.length || route[route.length - 1].cmd !== 'S') {
+    route.push({ t: Date.now() - recStart, cmd: 'S' });
+  }
+  els.btnRec.textContent = '● REC';
+  els.btnRec.classList.remove('rec');
+  log('SYS', 'Route recorded: ' + route.length + ' steps, ' +
+      (route[route.length - 1].t / 1000).toFixed(1) + ' s' + (reason ? ' (' + reason + ')' : ''));
+  updateRouteStatus();
+}
+function playRoute() {
+  if (!connected || recording || playing || !route.length) return;
+  if (uiMode === 1) { log('SYS', 'Route playback is manual-mode only'); return; }
+  playing = true;
+  playStart = Date.now();
+  els.btnPlay.textContent = '■ ABORT';
+  els.btnPlay.classList.add('playing');
+  log('SYS', 'Route playback started (' + route.length + ' steps)');
+  updateRouteStatus();
+  playStep(0);
+}
+function playStep(idx) {
+  if (!playing) return;
+  if (idx >= route.length) { finishPlayback('complete'); return; }
+  const ev = route[idx];
+  const due = playStart + ev.t - Date.now();
+  playTimer = setTimeout(() => {
+    if (!playing || !connected) return;
+    if (ev.cmd[0] === 'V') {
+      sendCommand(ev.cmd);
+    } else if (ev.cmd === 'S') {
+      releaseDir('route');
+    } else {
+      releaseDir('route');
+      pressDir(ev.cmd, 'route');
+    }
+    playStep(idx + 1);
+  }, Math.max(0, due));
+}
+function finishPlayback(reason) {
+  if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+  playing = false;
+  releaseDir('route');
+  els.btnPlay.textContent = '▶ PLAY';
+  els.btnPlay.classList.remove('playing');
+  if (connected) sendCommand('V' + els.speed.value);  // restore the panel's speed
+  log('SYS', 'Route playback ' + reason);
+  updateRouteStatus();
+}
+function abortPlayback(reason) { if (playing) finishPlayback('aborted — ' + reason); }
+function updateRouteStatus() {
+  if (recording) {
+    els.routeStatus.textContent = 'REC ' + ((Date.now() - recStart) / 1000).toFixed(0) + 's';
+  } else if (playing) {
+    els.routeStatus.textContent = 'PLAY ' + ((Date.now() - playStart) / 1000).toFixed(0) + 's';
+  } else if (route.length) {
+    els.routeStatus.textContent = route.length + ' STEPS · ' + (route[route.length - 1].t / 1000).toFixed(1) + 's';
+  } else {
+    els.routeStatus.textContent = 'EMPTY';
+  }
+}
+els.btnRec.addEventListener('click', () => { recording ? stopRecording() : startRecording(); });
+els.btnPlay.addEventListener('click', () => { playing ? abortPlayback('abort pressed') : playRoute(); });
+
+// ========================================================================
+// Display settings — color theme + layout. Cosmetic only, so both work
+// fully disconnected and never touch enableControls().
+// ========================================================================
+function setTheme(name, { persist = true } = {}) {
+  if (name === 'cyan') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', name);
+  els.themeSwatches.querySelectorAll('.swatch').forEach(b => {
+    b.setAttribute('aria-pressed', String(b.dataset.theme === name));
+  });
+  if (persist) { try { localStorage.setItem('sharkbot.theme', name); } catch (_) {} }
+}
+function setLayout(name, { persist = true, quiet = false } = {}) {
+  if (name === 'standard') document.documentElement.removeAttribute('data-layout');
+  else document.documentElement.setAttribute('data-layout', name);
+  els.layoutSwatches.querySelectorAll('.swatch').forEach(b => {
+    b.setAttribute('aria-pressed', String(b.dataset.layout === name));
+  });
+  if (persist) { try { localStorage.setItem('sharkbot.layout', name); } catch (_) {} }
+  if (!quiet) log('SYS', 'Layout: ' + name);
+}
+els.themeSwatches.querySelectorAll('.swatch').forEach(b => {
+  b.addEventListener('click', () => { setTheme(b.dataset.theme); log('SYS', 'Theme: ' + b.dataset.theme); });
+});
+els.layoutSwatches.querySelectorAll('.swatch').forEach(b => {
+  b.addEventListener('click', () => setLayout(b.dataset.layout));
+});
+
+// position:fixed, placed by JS and clamped to the viewport — the button
+// sits inside a wrapping flex row, so a plain CSS `right:0` anchor can land
+// under the wrong edge depending on how that row has wrapped.
+function positionSettingsPop() {
+  const r = els.btnSettings.getBoundingClientRect();
+  const popW = els.settingsPop.offsetWidth || 278;
+  const left = Math.max(12, Math.min(r.right - popW, window.innerWidth - popW - 12));
+  const top = Math.max(12, Math.min(r.bottom + 8, window.innerHeight - 12));
+  els.settingsPop.style.left = left + 'px';
+  els.settingsPop.style.top = top + 'px';
+}
+function openSettings() {
+  els.settingsPop.hidden = false;
+  els.btnSettings.setAttribute('aria-expanded', 'true');
+  positionSettingsPop();
+}
+function closeSettings() {
+  els.settingsPop.hidden = true;
+  els.btnSettings.setAttribute('aria-expanded', 'false');
+}
+els.btnSettings.addEventListener('click', e => {
+  e.stopPropagation();
+  els.settingsPop.hidden ? openSettings() : closeSettings();
+});
+els.settingsPop.addEventListener('click', e => e.stopPropagation());
+document.addEventListener('click', () => { if (!els.settingsPop.hidden) closeSettings(); });
+window.addEventListener('keydown', e => {
+  if (e.code === 'Escape' && !els.settingsPop.hidden) closeSettings();
+});
+window.addEventListener('resize', () => { if (!els.settingsPop.hidden) positionSettingsPop(); });
+
+// ========================================================================
+// Telemetry — accumulate notification fragments, parse on \n
+// ========================================================================
+function onNotify(e) {
+  rxBuf += decoder.decode(e.target.value, { stream: true });
+  if (rxBuf.length > 300) rxBuf = rxBuf.slice(-100); // runaway guard: no newline seen
+  let i;
+  while ((i = rxBuf.indexOf('\n')) >= 0) {
+    const line = rxBuf.slice(0, i).trim(); // trim also removes the \r from println
+    rxBuf = rxBuf.slice(i + 1);
+    if (line) parseLine(line);
+  }
+}
+function parseLine(line) {
+  if (line[0] === 'T') return parseT(line);
+  if (line[0] === 'E') return parseEvent(line);
+}
+function parseT(line) {
+  const p = line.split(',');
+  const irL = Number(p[1]), irR = Number(p[2]), s = Number(p[3]), m = Number(p[4]);
+  if (![irL, irR, s, m].every(Number.isFinite)) return;
+  lastTelemetryTs = Date.now();
+  rxCount++;
+
+  els.tSpeed.textContent = s;
+  els.tMode.textContent = m === 1 ? 'LINE' : 'MANUAL';
+  els.tIrL.textContent = irL;
+  els.tIrR.textContent = irR;
+  els.statusPanel.classList.remove('stale');
+  els.tLink.textContent = 'UP';
+  els.tLink.className = 'tval up';
+  dotPhase = !dotPhase;
+  els.rxDot.className = 'rxdot live' + (dotPhase ? ' tick' : '');
+}
+function parseEvent(line) {
+  const code = line.slice(2);
+  log('ERR', 'ROBOT: ' + code);
+  if (code === 'DEADMAN') {
+    els.statusSub.textContent = 'ROBOT DEADMAN TRIPPED';
+  }
+}
+
+// staleness watchdog + RX rate readout
+setInterval(() => {
+  if (recording || playing) updateRouteStatus();
+  const rate = rxCount * 2; // 500 ms window
+  rxCount = 0;
+  els.rxRate.textContent = rate + ' Hz';
+  if (!connected) { els.rxDot.className = 'rxdot'; return; }
+  if (lastTelemetryTs && Date.now() - lastTelemetryTs > STALE_AFTER_MS) {
+    els.statusPanel.classList.add('stale');
+    els.tLink.textContent = 'STALE';
+    els.tLink.className = 'tval down';
+    els.rxDot.className = 'rxdot';
+    setStatus('connected', 'TELEMETRY STALE');
+  }
+}, 500);
+
+// ========================================================================
+// Connection lifecycle
+// ========================================================================
+async function connect() {
+  if (connected || connecting) return;
+  connecting = true;
+  try {
+    setStatus('connecting', 'Opening device chooser…');
+    device = await navigator.bluetooth.requestDevice({
+      filters: [
+        { services: [UART_SERVICE] },
+        { namePrefix: 'Adafruit' },
+        { namePrefix: 'SharkBot' },
+      ],
+      // Mandatory even though the service is in filters — without it,
+      // getPrimaryService() throws a SecurityError.
+      optionalServices: [UART_SERVICE],
+    });
+    log('SYS', 'Device chosen: ' + (device.name || '(unnamed)'));
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+
+    setStatus('connecting', 'Connecting GATT…');
+    const server = await device.gatt.connect();
+    setStatus('connecting', 'Resolving UART service…');
+    const service = await server.getPrimaryService(UART_SERVICE);
+    rxChar = await service.getCharacteristic(UART_RX_CHAR); // we write here
+    txChar = await service.getCharacteristic(UART_TX_CHAR); // we listen here
+    useWWR = !!(rxChar.properties.writeWithoutResponse &&
+                typeof rxChar.writeValueWithoutResponse === 'function');
+
+    await txChar.startNotifications();
+    txChar.addEventListener('characteristicvaluechanged', onNotify);
+
+    // fresh link state
+    rxBuf = ''; decoder = new TextDecoder();
+    lastTelemetryTs = 0; rxCount = 0;
+    connected = true;
+    connecting = false;
+    enableControls(true);
+    setStatus('connected', (device.name || 'device') + ' · ' + (useWWR ? 'write w/o response' : 'write w/ response'));
+    log('SYS', 'Link up — notifications on, writes ' + (useWWR ? 'without response' : 'with response'));
+
+    setUiMode(0, { send: false });        // known state before syncing
+    sendCommand('V' + els.speed.value);   // sync the robot to the panel's speed
+    sendCommand('M0');
+  } catch (err) {
+    connecting = false;
+    if (err && err.name === 'NotFoundError') {
+      log('SYS', 'Chooser closed — no device selected (' + err.message + ')');
+    } else {
+      log('ERR', (err && err.name ? err.name + ': ' : '') + (err && err.message || String(err)));
+    }
+    try { if (device && device.gatt && device.gatt.connected) device.gatt.disconnect(); } catch (_) {}
+    connected = false;
+    rxChar = null; txChar = null;
+    enableControls(false);
+    setStatus('disconnected', 'Connect failed');
+  }
+}
+
+function onDisconnected() {
+  const wasConnected = connected;
+  connected = false; connecting = false;
+  rxChar = null; txChar = null;
+  heldDirs = [];
+  clearHeartbeat();
+  activeCmd = null;
+  updatePadVisual();
+  if (playing) finishPlayback('aborted — link lost');
+  if (recording) stopRecording('link lost');
+  if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
+  setUiMode(0, { send: false });
+  enableControls(false);
+  els.statusPanel.classList.add('stale');
+  els.tLink.textContent = 'DOWN';
+  els.tLink.className = 'tval down';
+  els.rxDot.className = 'rxdot';
+  setStatus('disconnected', wasConnected ? 'Link lost' : '');
+  // No silent auto-reconnect — the robot's deadman has already stopped the
+  // motors; reconnecting is a deliberate human action.
+  if (wasConnected) log('ERR', 'GATT link lost — controls locked, no auto-reconnect');
+  else log('SYS', 'Disconnected');
+}
+
+async function disconnectClicked() {
+  log('SYS', 'Disconnect requested');
+  stopAllDrive(false);
+  if (uiMode === 1) setUiMode(0, { send: false });
+  sendCommand('S'); // parting stop, best effort
+  const d = device;
+  try { await Promise.race([writeChain, new Promise(res => setTimeout(res, 300))]); } catch (_) {}
+  try {
+    if (d && d.gatt && d.gatt.connected) d.gatt.disconnect(); // fires gattserverdisconnected
+    else onDisconnected();
+  } catch (err) {
+    log('ERR', 'Disconnect: ' + (err && err.message || err));
+    onDisconnected();
+  }
+}
+
+els.btnConnect.addEventListener('click', connect);
+els.btnDisconnect.addEventListener('click', disconnectClicked);
+
+// ========================================================================
+// Boot — feature detection
+// ========================================================================
+(function boot() {
+  const hasBluetooth = 'bluetooth' in navigator;
+  if (!hasBluetooth || !window.isSecureContext) {
+    els.unsupported.hidden = false;
+    els.app.hidden = true;
+    if (!hasBluetooth) {
+      els.unsupportedTitle.textContent = 'BROWSER NOT SUPPORTED';
+      els.unsupportedBody.innerHTML =
+        '<p>This dashboard needs <b>Web Bluetooth</b>, which this browser does not implement.</p>' +
+        '<p>Supported: <b>Chrome</b> or <b>Edge</b> on Windows, macOS, ChromeOS, Linux, or Android.</p>' +
+        '<p>Not supported: Safari and Firefox on any platform — which means <b>iPhone and iPad cannot run this at all</b>.</p>';
+    } else {
+      els.unsupportedTitle.textContent = 'INSECURE CONTEXT';
+      els.unsupportedBody.innerHTML =
+        '<p>Web Bluetooth only runs in a <b>secure context</b>. Serve this page over HTTPS or from localhost:</p>' +
+        '<code>cd project-folder<br>python3 -m http.server 8000</code>' +
+        '<p>then open <b>http://localhost:8000</b> in Chrome or Edge.</p>';
+    }
+    return;
+  }
+  els.app.hidden = false;
+  try {
+    const savedSpeed = parseInt(localStorage.getItem('sharkbot.speed'), 10);
+    if (savedSpeed >= 0 && savedSpeed <= 255) {
+      els.speed.value = savedSpeed;
+      els.speedOut.textContent = savedSpeed;
+    }
+  } catch (_) {}
+  // Sync the settings swatches to whatever the pre-paint script already
+  // applied to <html> (data-theme / data-layout), without re-logging or
+  // re-persisting on every load.
+  const activeTheme = document.documentElement.getAttribute('data-theme') || 'cyan';
+  const activeLayout = document.documentElement.getAttribute('data-layout') || 'standard';
+  setTheme(activeTheme, { persist: false });
+  setLayout(activeLayout, { persist: false, quiet: true });
+  setStatus('disconnected', 'Bluetooth idle');
+  log('SYS', 'Console ready — Web Bluetooth available');
+  if (location.protocol === 'file:') {
+    log('SYS', 'Running from file:// — if the device chooser misbehaves, serve over http://localhost instead (see README)');
+  }
+})();
+</script>
+</body>
+</html>
