@@ -7,7 +7,7 @@ Chrome / Edge  ──Web Bluetooth──▶  nRF51822 (BLE UART)  ──SPI─�
   index.html                              Feather 32u4 Bluefruit LE              firmware/robot_control.ino
 ```
 
-![SharkBot dashboard](docs/screenshot.png)
+![SharkBot dashboard](screenshot.png)
 
 ---
 
